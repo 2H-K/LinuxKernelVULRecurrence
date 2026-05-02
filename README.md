@@ -60,6 +60,8 @@ mkdir -p ~/copyfail-lab
 cd ~/copyfail-lab
 ```
 
+![搭建完的文件结构](./workspace.png)
+
 ---
 
 # 📥 四、下载内核源码
