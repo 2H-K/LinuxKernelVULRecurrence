@@ -53,3 +53,9 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+linux-*.tar.gz
+linux-*.tar.xz
+linux-*.tar.bz2
+linux-*
+copyfail-lab
