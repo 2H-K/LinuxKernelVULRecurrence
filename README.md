@@ -138,7 +138,7 @@ make -j$(nproc)
 cd ~/copyfail-lab
 
 sudo debootstrap --variant=minbase --include=python3,strace \
-    noble debian-rootfs http://archive.ubuntu.com/ubuntu
+    noble ubuntu-rootfs http://archive.ubuntu.com/ubuntu
 ```
 
 > `--variant=minbase`：只装 libc + dpkg + apt，最干净  
@@ -147,7 +147,7 @@ sudo debootstrap --variant=minbase --include=python3,strace \
 ## 7.2 chroot 定制
 
 ```bash
-sudo chroot debian-rootfs /bin/bash -c '
+sudo chroot ubuntu-rootfs /bin/bash -c '
     echo "copyfail" > /etc/hostname
 
     echo "root:root" | chpasswd
@@ -164,20 +164,24 @@ sudo chroot debian-rootfs /bin/bash -c '
 ## 7.3 写入 init 脚本
 
 ```bash
-sudo bash -c 'cat > debian-rootfs/init <<INITEOF
+sudo bash -c 'cat > ubuntu-rootfs/init <<INITEOF
 #!/bin/sh
 mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 mount -t debugfs none /sys/kernel/debug
+mkdir -p /mnt/shared
+mount -t 9p -o trans=virtio shared /mnt/shared
 
 echo ""
 echo "[+] Copy Fail Lab Ready (debootstrap)"
+echo "[+] Shared dir mounted at /mnt/shared"
+echo "[+] Logged in as: bob (unprivileged)"
 echo ""
-exec /bin/bash
+exec su -l bob
 INITEOF'
 
-sudo chmod +x debian-rootfs/init
+sudo chmod +x ubuntu-rootfs/init
 ```
 
 ## 7.4 打包为 ext4 磁盘镜像
@@ -186,22 +190,27 @@ sudo chmod +x debian-rootfs/init
 cd ~/copyfail-lab
 
 # 根据实际大小调整 count（debootstrap minbase ~150-200MB，留余量）
-sudo du -sh debian-rootfs
+sudo du -sh ubuntu-rootfs
 dd if=/dev/zero of=rootfs.ext4 bs=1M count=512
 mkfs.ext4 -F rootfs.ext4
 
 sudo mkdir -p /mnt/rootfs
 sudo mount rootfs.ext4 /mnt/rootfs
-sudo cp -a debian-rootfs/. /mnt/rootfs/
+sudo cp -a ubuntu-rootfs/. /mnt/rootfs/
 sudo umount /mnt/rootfs
 ```
 
 ## 7.5 验证 rootfs
 
 ```bash
-# 快速检查关键文件是否存在
 sudo mkdir -p /mnt/rootfs && sudo mount rootfs.ext4 /mnt/rootfs
+
+# 关键文件
 ls /mnt/rootfs/init /mnt/rootfs/usr/bin/python3 /mnt/rootfs/usr/bin/strace
+
+# exploit 依赖 /usr/bin/su 的 SUID 位 —— 必须存在且为 -rwsr-xr-x
+ls -la /mnt/rootfs/usr/bin/su
+
 sudo umount /mnt/rootfs
 ```
 
@@ -227,7 +236,7 @@ qemu-system-x86_64 \
   -drive file="$ROOTFS",format=raw,if=virtio \
   -append "$KERNEL_APPEND" \
   -nographic \
-  -s -S \
+  -s \
   -m 512 \
   -enable-kvm \
   -fsdev local,id=shared,path="$SHARED_DIR",security_model=none \
@@ -237,7 +246,8 @@ EOF
 chmod +x run.sh
 ```
 
-> init 参数改为 `/init`（对应 7.3 写入的 init 脚本），启动后自动挂载 proc/sys/dev/debugfs。
+> `run.sh` 不带 `-S`，内核直接启动（VS Code 调试用）。
+> 终端 GDB 调试用 `run-gdb.sh`（带 `-S`，暂停等 GDB 连接）。
 
 ## 8.2 创建共享目录
 
@@ -249,12 +259,38 @@ mkdir -p shared
 
 ---
 
-## 8.3 双终端工作流
+## 8.3 VS Code 图形化调试（推荐）
 
-**终端 1** — 启动 QEMU：
+**Step 1** — 启动 QEMU（不带 `-S`，内核直接启动）：
 
 ```bash
 ./run.sh
+```
+
+等 QEMU 终端出现 `bob@(none):~$` 提示符。
+
+**Step 2** — VS Code 按 `Ctrl+Shift+D`，顶部选 **"QEMU Kernel Debug"**，按 **F5** 连接。
+
+**Step 3** — 在 VS Code 中打开 `crypto/algif_aead.c`，点击第 95 行左侧设断点。
+
+**Step 4** — QEMU 终端执行 exploit：
+
+```bash
+python3 /mnt/shared/exp.py
+```
+
+VS Code 会在断点处暂停，可图形化查看变量、调用栈、内存。
+
+> 如需终端 GDB 调试，使用 `./run-gdb.sh`（带 `-S`），工作流见 8.4。
+
+---
+
+## 8.4 终端 GDB 调试
+
+**终端 1** — 启动 QEMU（带 `-S`，暂停等 GDB）：
+
+```bash
+./run-gdb.sh
 ```
 
 **终端 2** — GDB 连接，放行内核启动：
@@ -263,12 +299,9 @@ mkdir -p shared
 gdb ./linux-6.6.1/vmlinux -ex "target remote :1234" -ex "continue"
 ```
 
-等终端 1 出现 `root@` 提示符后，终端 2 按 `Ctrl+C` 暂停内核，设断点：
+等终端 1 出现 `bob@` 提示符后，终端 2 按 `Ctrl+C` 暂停内核，设断点：
 
 ```gdb
-b __sys_recvmsg
-b sock_recvmsg
-b aead_recvmsg
 b _aead_recvmsg
 b crypto_aead_decrypt
 continue
@@ -276,42 +309,19 @@ continue
 
 ---
 
-# 🐛 九、GDB 调试
+# 🔥 九、触发漏洞
+
+**终端 1**（QEMU 虚拟机内，已自动以 bob 身份登录）直接执行 exploit：
 
 ```bash
-gdb ./linux-6.6.1/vmlinux \
-  -ex "target remote :1234" \
-  -ex "continue"
-```
-
-等内核启动完成后 `Ctrl+C` 暂停，再设断点：
-
-```gdb
-b __sys_recvmsg
-b sock_recvmsg
-b aead_recvmsg
-b _aead_recvmsg
-b crypto_aead_decrypt
-continue
-```
-
----
-
-# 🔥 十、触发漏洞
-
-**终端 1**（QEMU 虚拟机内）挂载共享目录并执行 exploit：
-
-```bash
-mkdir -p /mnt/shared
-mount -t 9p -o trans=virtio shared /mnt/shared
 python3 /mnt/shared/exp.py
 ```
 
-> proc / sys / dev / debugfs 已由 init 脚本自动挂载，无需手动操作。
+> init 脚本已自动完成：挂载 proc/sys/dev/debugfs、挂载 9p 共享目录、切换到 bob 用户。无需手动操作。
 
 ---
 
-# 🎯 十一、调试重点
+# 🎯 十、调试重点
 
 关键函数：
 
@@ -326,7 +336,7 @@ python3 /mnt/shared/exp.py
 
 ---
 
-# ❗ 十二、常见问题
+# ❗ 十一、常见问题
 
 ## ❌ VFS: Unable to mount root fs
 
@@ -355,7 +365,7 @@ make -j$(nproc)
 
 ```bash
 sudo debootstrap --variant=minbase --include=python3,strace \
-    noble debian-rootfs http://mirrors.tuna.tsinghua.edu.cn/ubuntu
+    noble ubuntu-rootfs http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 ```
 
 ## ❌ rootfs 空间不足

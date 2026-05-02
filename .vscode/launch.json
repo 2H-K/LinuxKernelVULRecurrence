@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "QEMU Kernel Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "/home/frank/code_audit/copyfailRecurrence/copyfail-lab/linux-6.6.1/vmlinux",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "miDebuggerServerAddress": "localhost:1234",
+            "cwd": "/home/frank/code_audit/copyfailRecurrence/copyfail-lab",
+            "setupCommands": [
+                {
+                    "description": "Set source directory",
+                    "text": "set directories /home/frank/code_audit/copyfailRecurrence/copyfail-lab/linux-6.6.1",
+                    "ignoreFailures": false
+                }
+            ]
+        }
+    ]
+}
