@@ -1,6 +1,10 @@
-# Copy Fail (CVE-2026-31431) 内核漏洞复现环境
+# 内核漏洞复现环境
 
 > 本项目提供一个完整的 Linux 内核漏洞复现与调试环境，用于复现 Copy Fail（CVE-2026-31431），支持 QEMU + GDB 动态调试,使人更加容易理解和学习此漏洞。
+
+参考文章:
+https://copy.fail/
+https://github.com/V4bel/dirtyfrag/tree/master
 
 ---
 
@@ -13,7 +17,7 @@ Copy Fail（CVE-2026-31431）是一个 Linux 内核本地提权漏洞：
 - 类型：逻辑漏洞（非 race）
 - 模块：`algif_aead`（AF_ALG 接口）
 
-debootstrap---
+---
 
 # 🧠 为什么选择 6.6.1
 
@@ -96,29 +100,90 @@ make defconfig
 然后一键写入所有必需配置：
 
 ```bash
+#!/bin/bash
+
+# ========================================
+# 区块1: 系统基础（QEMU/KVM 测试环境）
+# ========================================
 ./scripts/config --enable CONFIG_BLK_DEV_INITRD
 ./scripts/config --enable CONFIG_DEVTMPFS
-./scripts/config --enable CONFIG_DEBUG_INFO
-./scripts/config --enable CONFIG_CRYPTO_USER_API_AEAD
-./scripts/config --enable CONFIG_CRYPTO_USER_API
+./scripts/config --enable CONFIG_EXT4_FS
 ./scripts/config --enable CONFIG_VIRTIO
 ./scripts/config --enable CONFIG_VIRTIO_PCI
 ./scripts/config --enable CONFIG_VIRTIO_BLK
-./scripts/config --enable CONFIG_EXT4_FS
 ./scripts/config --enable CONFIG_NET_9P
 ./scripts/config --enable CONFIG_NET_9P_VIRTIO
 ./scripts/config --enable CONFIG_9P_FS
-./scripts/config --disable CONFIG_RANDOMIZE_BASE
+
+# ========================================
+# 区块2: 调试支持（可选）
+# ========================================
+./scripts/config --enable CONFIG_DEBUG_INFO
 ./scripts/config --enable CONFIG_FTRACE
 ./scripts/config --enable CONFIG_FUNCTION_TRACER
 ./scripts/config --enable CONFIG_FUNCTION_GRAPH_TRACER
 ./scripts/config --enable CONFIG_DYNAMIC_FTRACE
-# 2. 自动解决依赖冲突并更新 .config
+
+# ========================================
+# 区块3: bpftrace 支持（可选）
+# ========================================
+./scripts/config \
+  --enable CONFIG_BPF \
+  --enable CONFIG_BPF_SYSCALL \
+  --enable CONFIG_BPF_JIT \
+  --enable CONFIG_HAVE_EBPF_JIT \
+  --enable CONFIG_BPF_EVENTS \
+  --enable CONFIG_KPROBES \
+  --enable CONFIG_KPROBE_EVENTS \
+  --enable CONFIG_UPROBES \
+  --enable CONFIG_UPROBE_EVENTS \
+  --enable CONFIG_DEBUG_FS \
+  --enable CONFIG_FTRACE_SYSCALLS \
+  --enable CONFIG_HAVE_DYNAMIC_FTRACE \
+  --enable CONFIG_HAVE_KPROBES \
+  --enable CONFIG_ARCH_SUPPORTS_UPROBES
+
+# ========================================
+# 区块4: DirtyFrag 漏洞复现（可选）
+# ========================================
+./scripts/config --enable CONFIG_XFRM_ALGO
+./scripts/config --enable CONFIG_NET_KEY
+./scripts/config --enable CONFIG_INET_ESP
+./scripts/config --enable CONFIG_INET6_ESP
+./scripts/config --enable CONFIG_AF_RXRPC
+./scripts/config --enable CONFIG_KEYS
+
+# ========================================
+# 区块5: CopyFail 漏洞复现（核心）
+# ========================================
+./scripts/config --enable CONFIG_CRYPTO_USER_API
+./scripts/config --enable CONFIG_CRYPTO_USER_API_AEAD
+
+# 漏洞利用必需的算法链（olddefconfig 不会自动启用）
+./scripts/config --enable CONFIG_CRYPTO_AUTHENC
+./scripts/config --enable CONFIG_CRYPTO_SHA256
+./scripts/config --enable CONFIG_CRYPTO_AES
+./scripts/config --enable CONFIG_CRYPTO_CBC
+./scripts/config --enable CONFIG_CRYPTO_HMAC
+
+# 可选：关闭 KASLR 方便稳定复现 exploit
+# ./scripts/config --disable CONFIG_RANDOMIZE_BASE
+
+# ========================================
+# 执行 olddefconfig 解析依赖
+# ========================================
 make olddefconfig
 
+# ========================================
+# 验证关键配置
+# ========================================
+echo "=== CopyFail 相关配置 ==="
+grep -E "^CONFIG_CRYPTO_(USER_API|USER_API_AEAD|AUTHENC|SHA256|AES|CBC|HMAC)=" .config || echo "WARNING: 部分配置未生效"
+
+echo ""
+echo "=== DirtyFrag 相关配置 ==="
+grep -E "^CONFIG_(XFRM_ALGO|NET_KEY|INET_ESP|INET6_ESP|AF_RXRPC|KEYS)=" .config || echo "WARNING: 部分配置未生效"
 ```
-
-
 
 ---
 
@@ -144,12 +209,12 @@ make -j$(nproc)
 ```bash
 cd ~/copyfail-lab
 
-sudo debootstrap --variant=minbase --include=python3,strace \
+sudo debootstrap --variant=minbase --include=python3,strace,gcc,make,bpftrace,libc6-dev \
     noble ubuntu-rootfs http://archive.ubuntu.com/ubuntu
 ```
 
 > `--variant=minbase`：只装 libc + dpkg + apt，最干净  
-> `--include=python3,strace`：exploit 运行 + 调试必需
+> `--include=python3,strace,gcc,make,bpftrace,libc6-dev`：exploit 运行 + 调试 + 编译必需
 
 ## 7.2 chroot 定制
 
@@ -197,9 +262,9 @@ sudo chmod +x ubuntu-rootfs/init
 ```bash
 cd ~/copyfail-lab
 
-# 根据实际大小调整 count（debootstrap minbase ~150-200MB，留余量）
+# 根据实际大小调整 count（debootstrap minbase + gcc/bpftrace 等约 800-1200MB，留余量）
 sudo du -sh ubuntu-rootfs
-dd if=/dev/zero of=rootfs.ext4 bs=1M count=512
+dd if=/dev/zero of=rootfs.ext4 bs=1M count=1536
 mkfs.ext4 -F rootfs.ext4
 
 sudo mkdir -p /mnt/rootfs
@@ -214,7 +279,8 @@ sudo umount /mnt/rootfs
 sudo mkdir -p /mnt/rootfs && sudo mount rootfs.ext4 /mnt/rootfs
 
 # 关键文件
-ls /mnt/rootfs/init /mnt/rootfs/usr/bin/python3 /mnt/rootfs/usr/bin/strace
+ls /mnt/rootfs/init /mnt/rootfs/usr/bin/python3 /mnt/rootfs/usr/bin/strace \
+   /mnt/rootfs/usr/bin/gcc /mnt/rootfs/usr/bin/make /mnt/rootfs/usr/sbin/bpftrace
 
 # exploit 依赖 /usr/bin/su 的 SUID 位 —— 必须存在且为 -rwsr-xr-x
 ls -la /mnt/rootfs/usr/bin/su
@@ -245,7 +311,7 @@ qemu-system-x86_64 \
   -append "$KERNEL_APPEND" \
   -nographic \
   -s \
-  -m 512 \
+  -m 1024 \
   -enable-kvm \
   -fsdev local,id=shared,path="$SHARED_DIR",security_model=none \
   -device virtio-9p-pci,fsdev=shared,mount_tag=shared
@@ -253,9 +319,6 @@ EOF
 
 chmod +x run.sh
 ```
-
-> `run.sh` 不带 `-S`，内核直接启动（VS Code 调试用）。
-> 终端 GDB 调试用 `run-gdb.sh`（带 `-S`，暂停等 GDB 连接）。
 
 ## 8.2 创建共享目录
 
@@ -289,16 +352,16 @@ python3 /mnt/shared/exp.py
 
 VS Code 会在断点处暂停，可图形化查看变量、调用栈、内存。
 
-> 如需终端 GDB 调试，使用 `./run-gdb.sh`（带 `-S`），工作流见 8.4。
+> 如需终端 GDB 调试，工作流见 8.4。
 
 ---
 
 ## 8.4 终端 GDB 调试
 
-**终端 1** — 启动 QEMU（带 `-S`，暂停等 GDB）：
+**终端 1** — 启动 QEMU：
 
 ```bash
-./run-gdb.sh
+./run.sh
 ```
 
 **终端 2** — GDB 连接，放行内核启动：
@@ -375,10 +438,10 @@ make -j$(nproc)
 国内网络访问 `archive.ubuntu.com` 较慢，可换清华镜像：
 
 ```bash
-sudo debootstrap --variant=minbase --include=python3,strace \
+sudo debootstrap --variant=minbase --include=python3,strace,gcc,make,bpftrace,libc6-dev \
     noble ubuntu-rootfs http://mirrors.tuna.tsinghua.edu.cn/ubuntu
 ```
 
 ## ❌ rootfs 空间不足
 
-debootstrap minbase 约 150-200MB，`dd count=512`（512MB）通常够用。如需额外包，增大 count 值。
+debootstrap minbase 约 150-200MB，加上 gcc/bpftrace/make 等约 800-1200MB，`dd count=1536`（1.5GB）通常够用。如需额外包，增大 count 值。

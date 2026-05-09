@@ -1,6 +1,4 @@
 #!/bin/bash
-# build_rootfs.sh - 构建 Copy Fail 漏洞演示用的只读 ext4 根文件系统
-# 修改版：支持增量构建，保留 rootfs 目录以加快重构速度
 
 set -e
 
@@ -8,10 +6,10 @@ set -e
 WORK_DIR="./copyfail-lab"
 ROOTFS_DIR="$WORK_DIR/ubuntu-rootfs"
 IMAGE_FILE="$WORK_DIR/rootfs.ext4"
-IMAGE_SIZE_MB=768
+IMAGE_SIZE_MB=1536
 DEBOOTSTRAP_SUITE="noble"
 DEBOOTSTRAP_MIRROR="http://archive.ubuntu.com/ubuntu"
-PACKAGES="python3,strace,bpftrace"
+PACKAGES="python3,strace,bpftrace,gcc,libc6-dev,make,curl"
 
 # ======================== 检查权限 ========================
 if [ "$EUID" -ne 0 ]; then
