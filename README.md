@@ -8,7 +8,7 @@ https://github.com/V4bel/dirtyfrag/tree/master
 
 ---
 
-# 🧠 为什么选择 6.6.1
+# 🧠 为什么选择 6.6.x
 
 本项目使用 Linux **6.6.1**：
 
@@ -20,6 +20,8 @@ https://github.com/V4bel/dirtyfrag/tree/master
 Linux 6.6.1 是 6.6 系列早期稳定版本，由官方发布并维护
 
 ---
+
+后面也在6.6.136上面测试过
 
 # 🧰 一、宿主机环境要求
 
@@ -335,15 +337,30 @@ chmod +x run.sh
 
 ## 8.2 创建共享目录
 
+项目根目录下的 `shared/` 包含所有 bpftrace 监控脚本和辅助工具，直接拷贝到工作目录即可使用：
+
 ```bash
-mkdir -p shared
+cd ~/copyfail-lab
+cp -r /path/to/copyfailRecurrence/shared ./shared
 ```
 
-将 exploit 文件放入 `shared/` 目录。
+`shared/` 目录内容说明：
+
+| 文件 | 用途 |
+|---|---|
+| `monitor.bt` | bpftrace 漏洞调用链监控脚本（中文注释版） |
+| `monitor.sh` | 一键监控脚本（自动备份 su → 启动 bpftrace → 分析结果） |
+| `howtorunelf.py` | ELF 二进制分析工具（漏洞前后对比 su 内容） |
+| `recover.sh` | 漏洞后恢复 su 的脚本 |
+| `copyfailexp.py` | Copy-Fail (CVE-2026-31431) exploit |
+| `dirtyfrag.c` | DirtyFrag exploit 源码 |
+| `dirtyfrag` | DirtyFrag 编译好的二进制 |
+
+> 将 exploit（如 `copyfailexp.py`）也放入 `shared/`，QEMU 内通过 `/mnt/shared/` 访问。
 
 ---
 
-## 8.3 VS Code 图形化调试（推荐）
+## 8.3 VS Code 图形化调试
 
 **Step 1** — 启动 QEMU（不带 `-S`，内核直接启动）：
 
@@ -365,34 +382,11 @@ python3 /mnt/shared/exp.py
 
 VS Code 会在断点处暂停，可图形化查看变量、调用栈、内存。
 
-> 如需终端 GDB 调试，工作流见 8.4。
-
----
+由于内核噪声实际很难实现,正在研究如何实现
 
 ## 8.4 终端 GDB 调试
 
-**终端 1** — 启动 QEMU：
-
-```bash
-./run.sh
-# qemu里检查btf内核是否可用
-cat /sys/kernel/btf/vmlinux 
-```
-
-**终端 2** — GDB 连接，放行内核启动：
-
-```bash
-gdb ./linux-6.6.1/vmlinux -ex "target remote :1234" -ex "continue"
-```
-
-等终端 1 出现 `asdf@` 提示符后，终端 2 按 `Ctrl+C` 暂停内核，设断点：
-
-```gdb
-b _aead_recvmsg
-b crypto_aead_decrypt
-continue
-```
-
+正在研究如何实现
 ---
 
 # 🔥 九、触发漏洞
@@ -421,22 +415,7 @@ cp /tmp/su.clean /usr/bin/su
 chmod u+s /usr/bin/su
 ```
 
-# 🎯 十、调试重点
-
-关键函数：
-
-* `_aead_recvmsg`
-* `crypto_authenc_esn_decrypt`
-
-观察：
-
-* `assoclen`
-* `scatterlist`
-* `dst buffer`
-
----
-
-# ❗ 十一、常见问题
+# ❗ 十、常见问题
 
 ## ❌ VFS: Unable to mount root fs
 
