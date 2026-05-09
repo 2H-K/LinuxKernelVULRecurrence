@@ -1,6 +1,6 @@
 # 内核漏洞复现环境
 
-> 本项目提供一个完整的 Linux 内核漏洞复现与调试环境，用于复现 Copy Fail & DirtyFrag，支持 QEMU + GDB 动态调试,使人更加容易理解和学习此漏洞。
+> 本项目提供一个完整的 Linux 内核漏洞复现与调试环境，用于复现 Copy Fail & DirtyFrag，支持QEMU+bpftrace+GDB动态调试,使人更加容易理解和学习此漏洞。
 
 参考文章:
 https://copy.fail/
@@ -307,6 +307,9 @@ sudo umount /mnt/rootfs
 
 # 🚀 八、启动 QEMU
 
+[普通启动](./run.sh)
+[带ssh的启动](./havesshrun.sh)
+
 ## 8.1 创建脚本
 
 ```bash
@@ -348,10 +351,10 @@ cp -r /path/to/copyfailRecurrence/shared ./shared
 
 | 文件 | 用途 |
 |---|---|
-| `monitor.bt` | bpftrace 漏洞调用链监控脚本（中文注释版） |
-| `monitor.sh` | 一键监控脚本（自动备份 su → 启动 bpftrace → 分析结果） |
+| `copy_fail_monitor.bt` | bpftrace 漏洞调用链监控脚本（中文注释版） |
+| `copy_fail_monitor.sh` | 一键监控脚本（自动备份 su → 启动 bpftrace → 分析结果） |
 | `howtorunelf.py` | ELF 二进制分析工具（漏洞前后对比 su 内容） |
-| `recover.sh` | 漏洞后恢复 su 的脚本 |
+| `copy_fail_recover.sh` | 漏洞后恢复 su 的脚本 |
 | `copyfailexp.py` | Copy-Fail (CVE-2026-31431) exploit |
 | `dirtyfrag.c` | DirtyFrag exploit 源码 |
 | `dirtyfrag` | DirtyFrag 编译好的二进制 |
@@ -391,13 +394,16 @@ VS Code 会在断点处暂停，可图形化查看变量、调用栈、内存。
 
 # 🔥 九、触发漏洞
 
-**终端 1**（QEMU 虚拟机内，已自动以 asdf 身份登录）直接执行 exploit：
+**终端 1**
+
+QEMU 虚拟机内，已自动以root身份登录,切换asdf用户后直接执行 exploit：
 
 来自`https://copy.fail/#exploit`或者`https://github.com/theori-io/copy-fail-CVE-2026-31431/blob/main/copy_fail_exp.py`
-放到shared/exp.py中
+
+我已经放到了shared/中
 
 ```bash
-python3 /mnt/shared/exp.py
+python3 /mnt/shared/copyfailexp.py
 ```
 
 > init 脚本已自动完成：挂载 proc/sys/dev/debugfs、挂载 9p 共享目录、切换到 asdf 用户。无需手动操作。
@@ -407,6 +413,8 @@ python3 /mnt/shared/exp.py
 恢复环境:
 
 ```bash
+# 执行exp前备份正常的su
+cp /usr/bin/su /tmp/su.clean
 # 删除目录项（inode 仍被进程持有，不影响运行中的进程）
 rm /usr/bin/su
 # 创建新文件（新 inode，不再是 "busy" 状态）
