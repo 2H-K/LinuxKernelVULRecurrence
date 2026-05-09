@@ -1,0 +1,98 @@
+#!/usr/bin/env bpftrace
+
+BEGIN {
+    printf("\n");
+    printf("╔════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║         CVE‑2026‑31431 Copy‑Fail 完整调用链监控 (融合版)                 ║\n");
+    printf("╚════════════════════════════════════════════════════════════════════════════╝\n");
+    printf("\n");
+    printf("【漏洞原理】authencesn 处理 AEAD 关联数据(AAD)时，assoclen 校验存在\n");
+    printf("  逻辑缺陷，攻击者通过 AF_ALG + splice() 使 scatterwalk 越界读写 4 字\n");
+    printf("  节，覆写 setuid 二进制(如 /usr/bin/su)的页缓存实现提权。\n");
+    printf("\n");
+    printf("【字段说明】\n");
+    printf("  RECV  = aead_recvmsg — AEAD 接收加密数据，解密流程入口\n");
+    printf("  DECR  = crypto_aead_decrypt — 执行 AEAD 解密，关联数据在此与密文分离\n");
+    printf("  W     = 写方向拷贝 — 漏洞触发关键路径(buf→sg)\n");
+    printf("  buf   = 用户态缓冲区地址 — 越界数据写入此地址(信息泄露目标)\n");
+    printf("  sg    = scatterlist 地址 — 描述内核数据块，可能包含目标文件页缓存\n");
+    printf("  walk  = scatter_walk 游标地址 — 内核遍历状态，越界时游标已超出合法范围\n");
+    printf("  start = sg 内起始字节偏移 — 操控此值可使拷贝起点越过合法数据边界\n");
+    printf("  n     = 拷贝字节数 — 异常偏大(超出 AAD 长度)是漏洞触发的直接信号\n");
+    printf("  kstack= 内核调用栈 — 定位溢出路径，异常调用链说明漏洞被触发\n");
+    printf("\n");
+    printf("────────────────────────────────────────────────────────────────────────────\n");
+    printf("%-12s %-8s %-5s %-14s %-4s %s\n", "TIME", "PID", "UID", "函数", "方向", "详情与中文解释");
+    printf("────────────────────────────────────────────────────────────────────────────\n");
+}
+
+// 仅跟踪非 root 进程以避免噪声
+tracepoint:syscalls:sys_enter_splice /uid != 0/ {
+    @trace[pid] = 1;
+    @uid[pid] = uid;
+}
+
+// aead_recvmsg: AF_ALG 套接字接收加密数据，AEAD 解密流程入口
+kprobe:aead_recvmsg /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-14s %-4s → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "aead_recvmsg", "RECV");
+}
+
+// crypto_aead_decrypt: 内核执行 AEAD 解密，关联数据(assoc)与密文在此分离
+// 漏洞关键: assoclen 未正确校验，导致后续 scatterwalk 拷贝时越界
+kprobe:crypto_aead_decrypt /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-14s %-4s → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "crypto_aead", "DECR");
+}
+
+// scatterwalk_map_and_copy: 漏洞核心函数，将 scatterlist 数据拷贝到连续缓冲区
+// buf(arg0): 用户态缓冲区，越界数据写入此处
+// sg(arg1): scatterlist，可能指向目标文件(/usr/bin/su)的页缓存页
+// start(arg2): 偏移量，操控此值可越过合法边界
+// n(arg3): 字节数，异常偏大说明漏洞被触发
+// out(arg4): 1=写方向(buf→sg)，这是覆写页缓存的路径
+kprobe:scatterwalk_map_and_copy /@trace[pid]/ {
+    $buf  = arg0;
+    $sg   = arg1;
+    $start= arg2;
+    $n    = arg3;
+    $out  = arg4;
+
+    if ($out == 1) {
+        printf("%-12s %-8d %-5d %-14s W    → 【越界写】buf=0x%lx(用户态缓冲区) sg=0x%lx(可能为页缓存) start=%u(偏移) n=%u(字节数)\n",
+               strftime("%H:%M:%S", nsecs), pid, @uid[pid], "scatterwalk", $buf, $sg, $start, $n);
+        printf("             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发\n");
+    }
+}
+
+// scatterwalk_copychunks: 另一个 scatterwalk 拷贝函数，同样存在越界风险
+kprobe:scatterwalk_copychunks /@trace[pid]/ {
+    $buf    = arg0;
+    $walk   = arg1;
+    $nbytes = arg2;
+    $out    = arg3;
+
+    if ($out == 1) {
+        printf("%-12s %-8d %-5d %-14s W    → 【越界写】buf=0x%lx(用户态缓冲区) walk=0x%lx(游标) n=%lu(字节数)\n",
+               strftime("%H:%M:%S", nsecs), pid, @uid[pid], "scatterwalk", $buf, $walk, $nbytes);
+        printf("             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围\n");
+        printf("             └─ 内核调用栈(定位溢出路径):\n");
+        print(kstack);
+    }
+}
+
+// 10 秒无活动自动退出（exploit 通常 1 秒内完成）
+interval:s:10 {
+    printf("\n[超时] 10 秒无活动，自动退出监控。\n");
+    exit();
+}
+
+// 进程退出时清理追踪状态
+tracepoint:syscalls:sys_exit_execve /@trace[pid]/ {
+    delete(@trace[pid]);
+}
+
+END {
+    clear(@trace);
+    clear(@uid);
+}

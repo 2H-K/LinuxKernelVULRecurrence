@@ -1,0 +1,2068 @@
+Attaching 8 probes...
+
+╔════════════════════════════════════════════════════════════════════════════╗
+║         CVE‑2026‑31431 Copy‑Fail 完整调用链监控 (融合版)                 ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+【漏洞原理】authencesn 处理 AEAD 关联数据(AAD)时，assoclen 校验存在
+  逻辑缺陷，攻击者通过 AF_ALG + splice() 使 scatterwalk 越界读写 4 字
+  节，覆写 setuid 二进制(如 /usr/bin/su)的页缓存实现提权。
+
+【字段说明】
+  RECV  = aead_recvmsg — AEAD 接收加密数据，解密流程入口
+  DECR  = crypto_aead_decrypt — 执行 AEAD 解密，关联数据在此与密文分离
+  W     = 写方向拷贝 — 漏洞触发关键路径(buf→sg)
+  buf   = 用户态缓冲区地址 — 越界数据写入此地址(信息泄露目标)
+  sg    = scatterlist 地址 — 描述内核数据块，可能包含目标文件页缓存
+  walk  = scatter_walk 游标地址 — 内核遍历状态，越界时游标已超出合法范围
+  start = sg 内起始字节偏移 — 操控此值可使拷贝起点越过合法数据边界
+  n     = 拷贝字节数 — 异常偏大(超出 AAD 长度)是漏洞触发的直接信号
+  kstack= 内核调用栈 — 定位溢出路径，异常调用链说明漏洞被触发
+
+────────────────────────────────────────────────────────────────────────────
+TIME         PID      UID   函数         方向 详情与中文解释
+────────────────────────────────────────────────────────────────────────────
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=8(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=12(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=16(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=20(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=24(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=28(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=32(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=36(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=40(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=44(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=48(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=52(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=56(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=60(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=64(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=68(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=72(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=76(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=80(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=84(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=88(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=92(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=96(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=100(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=104(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=108(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=112(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=116(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=120(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=124(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=128(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=132(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=136(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=140(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=144(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=148(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=152(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=156(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=160(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  aead_recvmsg   RECV → 【AEAD接收】解密流程入口，用户态数据进入内核 crypto 子系统
+06:53:38     108      1000  crypto_aead    DECR → 【AEAD解密】关联数据(assoc)与密文在此分离，assoclen 校验缺陷在此体现
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=4(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd00(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+249
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=164(偏移) n=4(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afd04(用户态缓冲区) walk=0xffffc900002afc70(游标) n=4(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt+275
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) sg=0xffff888015bd3020(可能为页缓存) start=0(偏移) n=8(字节数)
+             └─ 解释: buf 是越界数据目标地址, sg 可能指向 /usr/bin/su 页缓存, n 异常偏大说明漏洞触发
+06:53:38     108      1000  scatterwalk    W    → 【越界写】buf=0xffffc900002afca0(用户态缓冲区) walk=0xffffc900002afc10(游标) n=8(字节数)
+             └─ 解释: walk 是内核遍历游标, 越界时游标已超出合法范围
+             └─ 内核调用栈(定位溢出路径):
+
+        scatterwalk_copychunks+5
+        scatterwalk_map_and_copy+82
+        crypto_authenc_esn_decrypt_tail+353
+        crypto_authenc_esn_decrypt+371
+        aead_recvmsg+1322
+        sock_recvmsg+160
+        __sys_recvfrom+172
+        __x64_sys_recvfrom+36
+        do_syscall_64+57
+        entry_SYSCALL_64_after_hwframe+120
+
+
+
+
+
