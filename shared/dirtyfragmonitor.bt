@@ -1,0 +1,203 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * DirtyFrag (CVE-2026-43284 + CVE-2026-43500) bpftrace 监控脚本
+ *
+ * DirtyFrag 链式利用两个漏洞:
+ *   变体1 xfrm-ESP: esp_input 绕过 skb_cow_data, 对 frag 做 in-place AEAD 解密
+ *                   → 每次 4 字节 STORE 到 /usr/bin/su page cache (seq_hi)
+ *   变体2 RxRPC:    rxkad_verify_packet_1 对 frag 做 in-place pcbc(fcrypt) 解密
+ *                   → 每次 8 字节 STORE 到 /etc/passwd page cache
+ *
+ * 与 Copy Fail 的关键区别:
+ *   Copy Fail 入口: AF_ALG → aead_recvmsg → crypto_authenc_esn_decrypt
+ *   DirtyFrag 入口: XFRM/ESP → esp_input 或 AF_RXRPC → rxkad_verify_packet_1
+ *   但两者共享同一个 sink: scatterwalk_map_and_copy (authencesn 越界写)
+ */
+
+BEGIN {
+    printf("\n");
+    printf("===================================================================\n");
+    printf("  DirtyFrag (CVE-2026-43284 + CVE-2026-43500) 调用链监控\n");
+    printf("===================================================================\n");
+    printf("\n");
+    printf("【漏洞原理】splice() 将 page cache 页以零拷贝方式植入 skb frag,\n");
+    printf("  接收端内核对 frag 做 in-place crypto, 导致 page cache 被原地篡改。\n");
+    printf("\n");
+    printf("【两个变体】\n");
+    printf("  变体1 xfrm-ESP: esp_input 绕过 skb_cow_data, authencesn 越界写 4B\n");
+    printf("  变体2 RxRPC:    rxkad_verify_packet_1 做 in-place pcbc 解密写 8B\n");
+    printf("\n");
+    printf("【与 Copy Fail 区别】\n");
+    printf("  Copy Fail: AF_ALG → aead_recvmsg → scatterwalk_map_and_copy\n");
+    printf("  DirtyFrag: XFRM/ESP → esp_input → scatterwalk_map_and_copy\n");
+    printf("           或 AF_RXRPC → rxkad_verify_packet_1 → crypto_pcbc_decrypt\n");
+    printf("\n");
+    printf("【字段说明】\n");
+    printf("  ESP   = esp_input — XFRM ESP 解密入口 (变体1)\n");
+    printf("  HDR   = esp_input_set_header — seq_hi 值植入 ESP header\n");
+    printf("  XFRM  = xfrm4_udp_encap_rcv — UDP 封装 ESP 包路由入口\n");
+    printf("  RXV   = rxkad_verify_packet_1 — RxRPC 数据包验证入口 (变体2)\n");
+    printf("  DECR  = crypto_pcbc_decrypt — pcbc 解密, RxRPC 变体的写入点\n");
+    printf("  AED   = crypto_authenc_esn_decrypt — AEAD 解密, 两个变体共享\n");
+    printf("  W     = scatterwalk_map_and_copy 写方向 (buf→sg, 覆写 page cache)\n");
+    printf("\n");
+    printf("-------------------------------------------------------------------\n");
+    printf("%-12s %-8s %-5s %-6s %s\n", "TIME", "PID", "UID", "阶段", "详情");
+    printf("-------------------------------------------------------------------\n");
+}
+
+// 仅跟踪非 root 进程的 splice 调用
+tracepoint:syscalls:sys_enter_splice /uid != 0/ {
+    @trace[pid] = 1;
+    @uid[pid] = uid;
+}
+
+// =====================================================================
+// 变体1: xfrm-ESP Page-Cache Write (CVE-2026-43284)
+// 路径: udp_rcv → xfrm4_udp_encap_rcv → xfrm_input → esp_input
+//       → skip_cow → esp_input_set_header → skb_to_sgvec
+//       → crypto_authenc_esn_decrypt → scatterwalk_map_and_copy
+// =====================================================================
+
+// xfrm4_udp_encap_rcv: UDP 封装的 ESP 包进入 XFRM 处理路径
+// 这是区分 DirtyFrag 和正常 IPsec 流量的入口
+kprobe:xfrm4_udp_encap_rcv /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【ESP路由】UDP封装ESP包进入XFRM解密路径\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "XFRM");
+}
+
+// esp_input: ESP 解密入口
+// 漏洞分支: if (!skb_cloned && !skb_has_frag_list) goto skip_cow
+// skip_cow 跳过了 skb_cow_data, 直接在 frag 上做 in-place crypto
+kprobe:esp_input /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【ESP解密】检查skb是否走skip_cow分支(漏洞路径)\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "ESP");
+}
+
+// esp_input_set_header: seq_hi 被植入 ESP header
+// seq_hi 来自 XFRMA_REPLAY_ESN_VAL, 攻击者完全控制这个 4 字节值
+// 这 4 字节最终通过 authencesn 越界写入 page cache
+kprobe:esp_input_set_header /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【seq_hi植入】攻击者控制的4字节值写入ESP header\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "HDR");
+    printf("             └─ 这4字节 = shell_elf[i*4..i*4+3], 将被越界写入/usr/bin/su\n");
+}
+
+// =====================================================================
+// 变体2: RxRPC Page-Cache Write (CVE-2026-43500)
+// 路径: recvmsg → rxrpc_recvmsg → rxrpc_recvmsg_data
+//       → rxrpc_verify_data → rxkad_verify_packet → rxkad_verify_packet_1
+//       → skb_to_sgvec → crypto_skcipher_decrypt → crypto_pcbc_decrypt
+// =====================================================================
+
+// rxrpc_recvmsg: AF_RXRPC socket 接收消息入口
+kprobe:rxrpc_recvmsg /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【RxRPC接收】AF_RXRPC数据接收入口\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "RXRCV");
+}
+
+// rxkad_verify_packet_1: RxRPC 数据包验证, 对 payload 做 in-place pcbc 解密
+// 关键代码: skcipher_request_set_crypt(req, sg, sg, 8, iv.x) — src==dst
+// 8 字节解密直接修改 page cache
+kprobe:rxkad_verify_packet_1 /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【RxRPC验证】对skb frag做in-place pcbc解密(src==dst)\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "RXV");
+    printf("             └─ 路径: rxrpc_verify_data → rxkad_verify_packet → rxkad_verify_packet_1\n");
+    printf("             └─ skb_to_sgvec 将 /etc/passwd page cache 页转为 SGL\n");
+    printf("             └─ pcbc(fcrypt) 解密 8 字节 → 写入 /etc/passwd page cache\n");
+}
+
+// =====================================================================
+// 两个变体共享的关键函数
+// =====================================================================
+
+// crypto_authenc_esn_decrypt: AEAD 解密, xfrm-ESP 变体的 sink
+// 第三次 scatterwalk_map_and_copy(tmp+1, dst, assoclen+cryptlen, 4, 1) 是漏洞写入
+kprobe:crypto_authenc_esn_decrypt /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【AEAD解密】authencesn 执行, 第3次scatterwalk是漏洞写入\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "AED");
+    printf("             └─ scatterwalk_map_and_copy(tmp+1, dst, assoclen+cryptlen, 4, 1)\n");
+    printf("             └─ 写入 4 字节 seq_hi → /usr/bin/su page cache\n");
+}
+
+// crypto_pcbc_decrypt: pcbc 解密, RxRPC 变体的 sink
+kprobe:crypto_pcbc_decrypt /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → 【pcbc解密】fcrypt_decrypt 执行, 8字节写入page cache\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "DECR");
+}
+
+// scatterwalk_map_and_copy: 最终的内存写入函数
+// arg4(dir)==1 表示写方向(buf→sg), 这是覆写 page cache 的路径
+kprobe:scatterwalk_map_and_copy /@trace[pid]/ {
+    $buf  = arg0;
+    $sg   = arg1;
+    $start= arg2;
+    $n    = arg3;
+    $out  = arg4;
+
+    if ($out == 1) {
+        printf("%-12s %-8d %-5d %-6s → 【越界写】sg=0x%lx offset=%lu n=%lu\n",
+               strftime("%H:%M:%S", nsecs), pid, @uid[pid], "W",
+               $sg, $start, $n);
+        printf("             └─ scatterwalk 往 page cache 页写入 %lu 字节\n", $n);
+    }
+}
+
+// scatterwalk_copychunks: 另一个 scatterwalk 写入函数
+kprobe:scatterwalk_copychunks /@trace[pid]/ {
+    $buf    = arg0;
+    $walk   = arg1;
+    $nbytes = arg2;
+    $out    = arg3;
+
+    if ($out == 1) {
+        printf("%-12s %-8d %-5d %-6s → 【越界写】walk=0x%lx n=%lu\n",
+               strftime("%H:%M:%S", nsecs), pid, @uid[pid], "W",
+               $walk, $nbytes);
+        print(kstack);
+    }
+}
+
+// =====================================================================
+// 系统调用层: 追踪 splice/vmsplice/recvmsg 以观察 exploit 的用户态行为
+// =====================================================================
+
+tracepoint:syscalls:sys_enter_splice /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → splice(fd_in=%d, fd_out=%d, len=%lu)\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "SYSCALL",
+           args->fd_in, args->fd_out, args->len);
+}
+
+tracepoint:syscalls:sys_enter_vmsplice /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → vmsplice(fd=%d, iov_len=%lu)\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "SYSCALL",
+           args->fd, args->nr_segs);
+}
+
+tracepoint:syscalls:sys_enter_recvmsg /@trace[pid]/ {
+    printf("%-12s %-8d %-5d %-6s → recvmsg(fd=%d)\n",
+           strftime("%H:%M:%S", nsecs), pid, @uid[pid], "SYSCALL",
+           args->fd);
+}
+
+// =====================================================================
+// 超时与清理
+// =====================================================================
+
+interval:s:15 {
+    printf("\n[超时] 15 秒无活动，自动退出监控。\n");
+    exit();
+}
+
+tracepoint:syscalls:sys_exit_execve /@trace[pid]/ {
+    delete(@trace[pid]);
+}
+
+END {
+    printf("\n===================================================================\n");
+    printf("  监控结束\n");
+    printf("===================================================================\n");
+    clear(@trace);
+    clear(@uid);
+}
